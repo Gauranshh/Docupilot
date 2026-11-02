@@ -73,3 +73,9 @@ NO_ANSWER = (
     "I couldn't find this in the knowledge base. Try rephrasing, or add the relevant "
     "document to the index and ask again."
 )
+
+VISION_PROMPT = """This is page {page} of "{source}". Its text could not be extracted, so describe it
+for a search index. Write plain text, at most 150 words:
+- Transcribe every readable word, number, label and formula exactly (write formulas in plain text).
+- Describe diagrams, charts and tables: what they show and their key values.
+- Do not add facts that are not visible on the page. If the page is blank or decorative, say "Blank page"."""

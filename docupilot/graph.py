@@ -175,6 +175,7 @@ def build_graph(
     settings: Settings | None = None,
     checkpointer: Any | None = None,
     classifier: QuestionClassifier | None = None,
+    on_llm_route: Callable[[str, str], None] | None = None,
 ):
     s = settings or get_settings()
     answer_llm = _retrying(llm)
@@ -208,6 +209,11 @@ def build_graph(
             system = prompts.ROUTER_SYSTEM.format(documents=_doc_listing(list_documents))
             d = router.invoke([SystemMessage(system), HumanMessage(state["standalone_question"])])
             choice, note = d.route, f"route: {d.route} ({d.reason})"
+            if on_llm_route:  # the trained router was unsure: keep the LLM's decision as a new example
+                try:
+                    on_llm_route(question, d.route)
+                except Exception:  # noqa: BLE001 — learning must never break answering
+                    pass
         if choice == "document" and (document_loader is None or not (list_documents and list_documents())):
             choice, note = "retrieve", note + " → no registered documents, using retrieval"
         return {"route": choice, "trace": _add_trace(state, note)}
@@ -374,16 +380,21 @@ class DocuPilot:
     """High-level API used by the CLI, the Streamlit app and the eval script."""
 
     def __init__(self, graph=None, namespace: str | None = None, llm_model: str | None = None,
-                 checkpointer: Any | None = None, settings: Settings | None = None):
+                 checkpointer: Any | None = None, settings: Settings | None = None,
+                 cache=None, kb_signature: Callable[[], str] | None = None):
         self.settings = settings or get_settings()
         self.model = llm_model or self.settings.llm_model
+        self.namespace = namespace or self.settings.pinecone_namespace
+        self.cache = cache
+        self.kb_signature = kb_signature or (lambda: "")
         if graph is None:
             from .llm import get_grader_llm, get_llm
             from .registry import DocumentRegistry, make_document_loader
+            from .router_model import record_learned
             from .vectorstore import make_pinecone_retriever
             from .web import make_tavily_search
 
-            ns = namespace or self.settings.pinecone_namespace
+            ns = self.namespace
             registry = DocumentRegistry()
             graph = build_graph(
                 get_llm(self.model),
@@ -394,14 +405,26 @@ class DocuPilot:
                 list_documents=lambda: registry.list(ns),
                 checkpointer=checkpointer,
                 classifier=_load_classifier(self.settings),
+                on_llm_route=record_learned if self.settings.router_learning else None,
             )
+            if cache is None and self.settings.answer_cache:
+                from .cache import AnswerCache
+                self.cache = AnswerCache(self.settings.data_dir / "cache.sqlite", self.settings.cache_ttl_hours)
+            if kb_signature is None:
+                self.kb_signature = lambda: registry.signature(ns)
         self.graph = graph
 
+    def _cache_key(self, question: str, sources: list[str] | None) -> str:
+        from .cache import cache_key
+        return cache_key(question, self.namespace, self.model, sources, self.kb_signature())
+
     def ask(self, question: str, thread_id: str = "default", sources: list[str] | None = None,
-            on_step: Callable[[str], None] | None = None) -> dict:
+            on_step: Callable[[str], None] | None = None,
+            on_token: Callable[[str], None] | None = None) -> dict:
+        """Answer one question. `on_step(node)` reports progress; `on_token(text_so_far)` streams the answer."""
         question = (question or "").strip()
         result = {"answer": "", "sources": [], "grounded": None, "used_web": False,
-                  "route": None, "trace": [], "error": None}
+                  "route": None, "trace": [], "error": None, "cached": False}
         if not question:
             result.update(answer="Please type a question.", error="empty question")
             return result
@@ -411,6 +434,22 @@ class DocuPilot:
             return result
 
         config = {"configurable": {"thread_id": thread_id}}
+        first_turn = not self.graph.get_state(config).values.get("messages")
+        key = self._cache_key(question, sources) if (self.cache is not None and first_turn) else None
+        if key:
+            hit = self.cache.get(key)
+            if hit:
+                try:  # keep the conversation history consistent, as if the graph had answered
+                    self.graph.update_state(config, {"messages": [HumanMessage(question), AIMessage(hit["answer"])]},
+                                            as_node="finalize")
+                except Exception:  # noqa: BLE001
+                    pass
+                result.update(hit, cached=True,
+                              trace=["answer reused from cache: same question, same documents (no AI calls)"])
+                if on_token:
+                    on_token(hit["answer"])
+                return result
+
         turn_input: RAGState = {
             "messages": [HumanMessage(question)],
             "question": question,
@@ -425,11 +464,22 @@ class DocuPilot:
             "sources": [],
             "trace": [],
         }
+        streamed, step = "", None
         try:
-            for update in self.graph.stream(turn_input, config, stream_mode="updates"):
-                if on_step:
-                    for node in update:
+            for mode, payload in self.graph.stream(turn_input, config, stream_mode=["updates", "messages"]):
+                if mode == "updates" and on_step:
+                    for node in payload:
                         on_step(node)
+                elif mode == "messages" and on_token:
+                    chunk, meta = payload
+                    if meta.get("langgraph_node") not in STREAMED_NODES:
+                        continue
+                    if meta.get("langgraph_step") != step:  # a regenerated answer starts over
+                        step, streamed = meta.get("langgraph_step"), ""
+                    piece = _text(chunk) if hasattr(chunk, "content") else ""
+                    if piece:
+                        streamed += piece
+                        on_token(streamed)
         except Exception as e:  # noqa: BLE001 — never show a raw traceback to the user
             result.update(answer=friendly_error(e, self.model), error=f"{type(e).__name__}: {e}")
             if not isinstance(e, DocuPilotError):
@@ -449,6 +499,8 @@ class DocuPilot:
             route=final.get("route"),
             trace=final.get("trace", []),
         )
+        if key and _cacheable(result):
+            self.cache.put(key, question, result)
         return result
 
     def history(self, thread_id: str) -> list[dict]:
@@ -459,3 +511,13 @@ class DocuPilot:
             role = "user" if isinstance(m, HumanMessage) else "assistant"
             out.append({"role": role, "content": _text(m)})
         return out
+
+
+STREAMED_NODES = {"generate", "direct_answer"}
+
+
+def _cacheable(result: dict) -> bool:
+    """Only answers grounded in the documents are worth reusing."""
+    return (not result["error"] and result["route"] in {"retrieve", "document"}
+            and result["grounded"] is not False and not result["used_web"]
+            and bool(result["sources"]) and result["answer"] != prompts.NO_ANSWER)

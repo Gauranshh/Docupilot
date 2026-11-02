@@ -22,6 +22,50 @@ DEFAULT_DATA = Path(__file__).resolve().parents[1] / "data" / "router_train.csv"
 DEFAULT_MODEL = Path(__file__).resolve().parents[1] / "models" / "router.joblib"
 
 
+def learned_path() -> Path:
+    from .config import get_settings
+    return Path(get_settings().data_dir) / "router_learned.csv"
+
+
+def _read_learned(path: Path) -> list[tuple[str, str]]:
+    if not path.exists():
+        return []
+    with path.open(encoding="utf-8") as f:
+        return [(r["label"], r["question"]) for r in csv.DictReader(f) if r.get("label") in LABELS]
+
+
+def _write_learned(path: Path, rows: list[tuple[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["label", "question"])
+        w.writerows(rows)
+
+
+def record_learned(question: str, label: str, path: Path | None = None) -> None:
+    """Save a question the LLM router labelled (the trained model was unsure about it)."""
+    if label not in LABELS or not question.strip():
+        return
+    path = Path(path or learned_path())
+    rows = [r for r in _read_learned(path) if r[1].strip().lower() != question.strip().lower()]
+    _write_learned(path, rows + [(label, question.strip())])
+
+
+def forget_learned(question: str, path: Path | None = None) -> bool:
+    """Drop a learned example (used when the user marks that answer 👎)."""
+    path = Path(path or learned_path())
+    rows = _read_learned(path)
+    keep = [r for r in rows if r[1].strip().lower() != question.strip().lower()]
+    if len(keep) != len(rows):
+        _write_learned(path, keep)
+        return True
+    return False
+
+
+def learned_count(path: Path | None = None) -> int:
+    return len(_read_learned(Path(path or learned_path())))
+
+
 def load_dataset(path: Path = DEFAULT_DATA) -> tuple[list[str], list[str]]:
     texts, labels = [], []
     with Path(path).open(encoding="utf-8") as f:
@@ -51,13 +95,20 @@ def build_pipeline():
 
 
 def train(data_path: Path = DEFAULT_DATA, model_path: Path = DEFAULT_MODEL,
-          test_size: float = 0.25, seed: int = 42) -> dict:
-    """Train with a held-out test split and 5-fold cross-validation, then fit on all data and save."""
+          test_size: float = 0.25, seed: int = 42, learned: Path | None = None) -> dict:
+    """Train with a held-out test split and 5-fold cross-validation, then fit on all data and save.
+
+    `learned`: extra examples the app collected from real use (LLM-router decisions)."""
     import joblib
     from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
     from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
 
     texts, labels = load_dataset(data_path)
+    seen = {q.lower() for q in texts}
+    extra = [(lab, q) for lab, q in _read_learned(Path(learned))] if learned else []
+    extra = [(lab, q) for lab, q in extra if q.lower() not in seen]
+    texts += [q for _, q in extra]
+    labels += [lab for lab, _ in extra]
     x_tr, x_te, y_tr, y_te = train_test_split(texts, labels, test_size=test_size,
                                               stratify=labels, random_state=seed)
     model = build_pipeline().fit(x_tr, y_tr)
@@ -83,6 +134,7 @@ def train(data_path: Path = DEFAULT_DATA, model_path: Path = DEFAULT_MODEL,
     metrics = {
         "confident_cv": confident,
         "examples": len(texts),
+        "learned_examples": len(extra),
         "per_label": {lab: labels.count(lab) for lab in LABELS},
         "holdout_size": len(x_te),
         "holdout_accuracy": round(float(accuracy_score(y_te, pred)), 4),

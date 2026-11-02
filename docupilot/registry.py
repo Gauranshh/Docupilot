@@ -103,6 +103,13 @@ class DocumentRegistry:
     def list(self, namespace: str) -> dict[str, dict]:
         return dict(sorted(self._load().get(namespace, {}).items()))
 
+    def signature(self, namespace: str) -> str:
+        """Fingerprint of a knowledge base: changes whenever a document is added, replaced or deleted."""
+        import hashlib
+        docs = self.list(namespace)
+        raw = json.dumps({n: [m.get("ingested_at"), m.get("chunks"), m.get("chars")] for n, m in docs.items()}, sort_keys=True)
+        return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
     def text(self, namespace: str, name: str) -> str | None:
         tp = self._text_path(namespace, name)
         return tp.read_text(encoding="utf-8") if tp.exists() else None

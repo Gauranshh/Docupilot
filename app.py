@@ -146,6 +146,10 @@ with st.sidebar:
     st.subheader(f"Documents ({len(docs)})")
     with st.expander("➕ Add documents", expanded=not docs):
         uploads = st.file_uploader("PDF, Markdown or text", type=["pdf", "md", "txt"], accept_multiple_files=True)
+        read_images = st.checkbox(
+            "Read pictures on pages with little text", value=settings.describe_images,
+            help=f"Diagrams, tables and scanned pages are read by the AI model so they become searchable. "
+                 f"Uses 1 AI call per such page (at most {settings.vision_max_pages} per file).")
         if st.button("Ingest", disabled=not uploads, use_container_width=True, type="primary"):
             from docupilot.ingest import ingest_paths
             with tempfile.TemporaryDirectory() as tmp, st.status("Ingesting…", expanded=True) as status:
@@ -156,17 +160,34 @@ with st.sidebar:
                         p.write_bytes(f.getbuffer())
                         paths.append(p)
                         names.append(f.name)
-                    report = ingest_paths(paths, namespace=namespace, names=names, progress=st.write)
+                    report = ingest_paths(paths, namespace=namespace, names=names, progress=st.write,
+                                          describe_images=read_images)
                     for w in report["warnings"]:
                         st.warning(w)
                     for e in report["errors"]:
                         st.error(e)
                     ok = bool(report["files"])
+                    if ok:
+                        load_bot.clear()  # new documents: rebuild the keyword index and cache key
                     status.update(label="Ingestion complete" if ok else "Nothing ingested",
                                   state="complete" if ok else "error")
                 except Exception as e:  # noqa: BLE001
                     st.error(friendly_error(e))
                     status.update(label="Ingestion failed", state="error")
+
+    if not docs:
+        st.caption("No documents listed. If you ingested before (e.g. on another computer, or the app "
+                   "restarted on a cloud host), restore the list from Pinecone.")
+        if st.button("♻️ Restore from Pinecone", use_container_width=True):
+            try:
+                from docupilot.ingest import restore_from_pinecone
+                with st.spinner("Reading stored chunks from Pinecone…"):
+                    r = restore_from_pinecone(namespace, progress=lambda m: None)
+                st.toast(f"Restored {len(r['restored'])} document(s) from {r['vectors']} stored chunks")
+                load_bot.clear()
+                st.rerun()
+            except Exception as e:  # noqa: BLE001
+                st.error(friendly_error(e))
 
     for name, meta in docs.items():
         with st.expander(f"📄 {name}"):
@@ -178,6 +199,7 @@ with st.sidebar:
                 try:
                     from docupilot.ingest import delete_document
                     n = delete_document(name, namespace)
+                    load_bot.clear()
                     st.toast(f"Deleted {name} ({n} vectors)")
                     st.rerun()
                 except Exception as e:  # noqa: BLE001
@@ -212,6 +234,29 @@ with st.sidebar:
 
     st.divider()
     show_trace = st.toggle("Show agent trace", value=True)
+    with st.expander("🧠 Router learning"):
+        from docupilot.router_model import learned_count
+        n_learned = learned_count()
+        st.caption(f"When the trained router is unsure, the AI decides and DocuPilot keeps that decision as a "
+                   f"new training example. Collected so far: **{n_learned}**.")
+        if st.button("Retrain router", disabled=n_learned == 0, use_container_width=True):
+            from docupilot.router_model import DEFAULT_MODEL, learned_path, train
+            with st.spinner("Training…"):
+                m = train(model_path=DEFAULT_MODEL, learned=learned_path())
+            load_bot.clear()
+            st.success(f"Retrained on {m['examples']} questions ({m['learned_examples']} learned). "
+                       f"Cross-validated accuracy {m['cv5_accuracy_mean']:.0%}.")
+    with st.expander("⚡ Answer cache"):
+        try:
+            from docupilot.cache import AnswerCache
+            c = AnswerCache(settings.data_dir / "cache.sqlite")
+            stats = c.stats()
+            st.caption(f"{stats['answers']} saved answers, reused {stats['reused']} times. Cached answers cost "
+                       "no AI calls and are cleared automatically when documents change.")
+            if st.button("Clear cache", use_container_width=True, disabled=not stats["answers"]):
+                st.toast(f"Cleared {c.clear()} cached answers")
+        except Exception as e:  # noqa: BLE001
+            st.caption(f"Cache unavailable: {e}")
     with st.expander("Index stats"):
         try:
             from docupilot.vectorstore import index_stats
@@ -233,6 +278,9 @@ def save_feedback(idx: int):
     log_feedback({"thread_id": st.session_state.thread_id, "namespace": namespace, "model": model,
                   "question": question, "answer": turn["content"], "rating": "up" if rating == 1 else "down",
                   "route": res.get("route"), "sources": [s["source"] for s in res.get("sources", [])]})
+    if rating == 0 and question:  # 👎: don't let the router learn from this question's routing
+        from docupilot.router_model import forget_learned
+        forget_learned(question)
     st.toast("Thanks for the feedback!")
 
 
@@ -243,6 +291,8 @@ def render_extras(res: dict | None, idx: int) -> None:
         badge = ROUTE_BADGES[res["route"]]
         if res.get("grounded") is True:
             badge += "  ·  ✅ verified against sources"
+        if res.get("cached"):
+            badge += "  ·  ⚡ from cache (no AI calls)"
         if res.get("used_web"):
             badge += "  ·  🌐 web results"
         st.caption(badge)
@@ -286,11 +336,14 @@ if question := st.chat_input("Ask a question…"):
     with st.chat_message("assistant"):
         try:
             bot = load_bot(namespace, model)
-            with st.status("Thinking…") as status:
-                res = bot.ask(question, thread_id=st.session_state.thread_id, sources=scope or None,
-                              on_step=lambda node: status.update(label=STEP_LABELS.get(node, node)))
-                status.update(label="Answered" if not res["error"] else "Failed",
-                              state="complete" if not res["error"] else "error")
+            status = st.status("Thinking…")
+            live = st.empty()  # the answer appears here word by word while it is written
+            res = bot.ask(question, thread_id=st.session_state.thread_id, sources=scope or None,
+                          on_step=lambda node: status.update(label=STEP_LABELS.get(node, node)),
+                          on_token=lambda text: live.markdown(text + " ▌"))
+            live.empty()
+            status.update(label="Answered" if not res["error"] else "Failed",
+                          state="complete" if not res["error"] else "error")
         except Exception as e:  # noqa: BLE001 — e.g. bad keys while building the bot
             res = {"answer": friendly_error(e, model), "error": str(e), "sources": [], "trace": []}
         if res.get("error"):

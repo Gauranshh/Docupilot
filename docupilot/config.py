@@ -63,6 +63,10 @@ class Settings:
     chunk_size: int = field(default_factory=lambda: int(_env("CHUNK_SIZE", "1000")))
     chunk_overlap: int = field(default_factory=lambda: int(_env("CHUNK_OVERLAP", "150")))
     merge_short_pages: bool = field(default_factory=lambda: _bool("MERGE_SHORT_PAGES", True))   # slide decks
+    # Read pages that are mostly pictures with the AI model (1 call per page, at ingest, opt-in)
+    describe_images: bool = field(default_factory=lambda: _bool("DESCRIBE_IMAGES", False))
+    vision_min_chars: int = field(default_factory=lambda: int(_env("VISION_MIN_CHARS", "80")))
+    vision_max_pages: int = field(default_factory=lambda: int(_env("VISION_MAX_PAGES", "40")))
     hybrid_search: bool = field(default_factory=lambda: _bool("HYBRID_SEARCH", True))           # BM25 + vectors
     fetch_k: int = field(default_factory=lambda: int(_env("FETCH_K", "20")))      # candidates from Pinecone
     top_k: int = field(default_factory=lambda: int(_env("TOP_K", "5")))           # kept after reranking
@@ -85,6 +89,11 @@ class Settings:
     # Trained question router (models/router.joblib): used before the LLM router when confident
     trained_router: bool = field(default_factory=lambda: _bool("TRAINED_ROUTER", True))
     router_min_confidence: float = field(default_factory=lambda: float(_env("ROUTER_MIN_CONFIDENCE", "0.7")))
+    # When the trained router is unsure, keep the LLM router's decision as a new training example
+    router_learning: bool = field(default_factory=lambda: _bool("ROUTER_LEARNING", True))
+    # Reuse answers to repeated first questions (cleared automatically when documents change)
+    answer_cache: bool = field(default_factory=lambda: _bool("ANSWER_CACHE", True))
+    cache_ttl_hours: float = field(default_factory=lambda: float(_env("CACHE_TTL_HOURS", "168")))
 
     # Optional web-search fallback (Tavily). Off automatically when no key is set.
     tavily_api_key: str | None = field(default_factory=lambda: os.getenv("TAVILY_API_KEY"))

@@ -48,6 +48,7 @@ def main() -> None:
 
     cases = json.loads(args.cases.read_text(encoding="utf-8"))
     bot = DocuPilot(namespace=args.namespace, llm_model=args.model)
+    bot.cache = None  # every question must really run, or the scores would be meaningless
     rows = []
 
     for i, c in enumerate(cases, 1):
@@ -74,9 +75,16 @@ def main() -> None:
         rows.append(row)
         print(f"[{i:>2}/{len(cases)}] {'PASS' if row['passed'] else 'FAIL'}  {latency:5.1f}s  "
               f"{res['route'] or '-':8}  {c['question']}" + (f"   !! {res['error'][:80]}" if res["error"] else ""))
+        if res["error"] and ("today's free-tier quota" in res["answer"] or "no credit" in res["answer"]):
+            print("\nStopping: the AI provider's quota is used up. Partial results are saved below;"
+                  " run again after the reset, or pass --model with another model.")
+            break
         if args.delay:
             time.sleep(args.delay)
 
+    if not rows:
+        print("No questions were answered.")
+        return
     ans = [r for r in rows if r["kind"] == "answer"]
     dec = [r for r in rows if r["kind"] == "decline"]
     routed = [r for r in rows if r["expected_route"]]
@@ -86,6 +94,7 @@ def main() -> None:
         "answer_accuracy": pct(sum(r["correct"] for r in ans), len(ans)),
         "routing_accuracy": pct(sum(r["route_ok"] for r in routed), len(routed)),
         "grounded_rate": pct(sum(bool(r["grounded"]) for r in ans), len(ans)),
+        "questions_run": f"{len(rows)}/{len(cases)}",
         "refusal_accuracy": pct(sum(r["passed"] for r in dec), len(dec)),
         "errors": sum(bool(r["error"]) for r in rows),
         "latency_mean_s": round(statistics.mean(lat), 2),

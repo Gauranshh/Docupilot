@@ -21,6 +21,11 @@ from .config import get_settings
 from .errors import DocuPilotError
 from .registry import DocumentRegistry
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .vision import PageDescriber
+
 SUPPORTED = {".pdf", ".md", ".txt"}
 MIN_CHARS_PER_PAGE = 25  # below this a PDF page is almost certainly a scanned image
 
@@ -38,8 +43,45 @@ def _clean(text: str) -> str:
     return text.strip()
 
 
-def load_file(path: Path, display_name: str | None = None) -> tuple[list[Document], list[str]]:
-    """Return (documents, warnings)."""
+def _describe_low_text_pages(path: Path, name: str, docs: list[Document], describe_page) -> list[str]:
+    """Add AI descriptions to pages whose extracted text is shorter than VISION_MIN_CHARS."""
+    from .vision import VisionQuotaExhausted, render_page_png
+
+    s = get_settings()
+    targets = [d for d in docs if len(d.page_content) < s.vision_min_chars]
+    warnings: list[str] = []
+    if len(targets) > s.vision_max_pages:
+        warnings.append(f"{name}: {len(targets)} pages need image reading; only the first "
+                        f"{s.vision_max_pages} were read (VISION_MAX_PAGES).")
+        targets = targets[: s.vision_max_pages]
+    described = 0
+    for d in targets:
+        page = d.metadata["page"]
+        try:
+            text = describe_page(render_page_png(path, page), page, name)
+        except VisionQuotaExhausted:
+            warnings.append(f"{name}: the AI quota ran out after reading {described} page image(s); "
+                            "the rest were indexed as text only. Re-ingest later to finish.")
+            break
+        except Exception as e:  # noqa: BLE001 — one bad page must not stop the file
+            warnings.append(f"{name}: could not read the image on page {page} ({type(e).__name__}).")
+            continue
+        if text and not text.lower().startswith("blank page"):
+            d.page_content = (d.page_content + "\n\n" if d.page_content else "") + f"[Image description] {text}"
+            d.metadata["vision"] = True
+            described += 1
+    if described:
+        warnings.append(f"{name}: read {described} page image(s) with the AI model.")
+    return warnings
+
+
+def load_file(path: Path, display_name: str | None = None,
+              describe_page: "PageDescriber | None" = None) -> tuple[list[Document], list[str]]:
+    """Return (documents, warnings).
+
+    With `describe_page`, PDF pages with little text (images, diagrams, scans) are rendered
+    and described by the AI model, so their content becomes searchable.
+    """
     name = display_name or path.name
     suffix = path.suffix.lower()
     warnings: list[str] = []
@@ -53,11 +95,14 @@ def load_file(path: Path, display_name: str | None = None) -> tuple[list[Documen
             raise DocuPilotError(f"Could not read '{name}': {e}") from e
         docs = [Document(_clean(t), metadata={"source": name, "page": i}) for i, t in enumerate(pages, 1)]
         empty = [d.metadata["page"] for d in docs if len(d.page_content) < MIN_CHARS_PER_PAGE]
-        if pages and len(empty) == len(pages):
+        if pages and len(empty) == len(pages) and describe_page is None:
             raise DocuPilotError(
                 f"'{name}' has no selectable text — it looks like a scanned/image PDF. "
-                "Export it with text (or run OCR) and upload again."
+                "Tick “Read pictures on pages” (or use --describe-images) to read it with the AI model."
             )
+        if describe_page is not None:
+            warnings += _describe_low_text_pages(path, name, docs, describe_page)
+            empty = [d.metadata["page"] for d in docs if len(d.page_content) < MIN_CHARS_PER_PAGE]
         if empty:
             shown = ", ".join(map(str, empty[:10])) + ("…" if len(empty) > 10 else "")
             warnings.append(f"{name}: {len(empty)} page(s) had little or no text (pages {shown}); "
@@ -192,7 +237,7 @@ def delete_document(name: str, namespace: str | None = None) -> int:
 
 
 def ingest_paths(paths: list[Path], namespace: str | None = None, names: list[str] | None = None,
-                 progress: Callable[[str], None] | None = None) -> dict:
+                 progress: Callable[[str], None] | None = None, describe_images: bool | None = None) -> dict:
     """Ingest files/folders. `names` lets the UI keep original upload filenames."""
     from .vectorstore import ensure_index, get_vectorstore
 
@@ -213,10 +258,15 @@ def ingest_paths(paths: list[Path], namespace: str | None = None, names: list[st
     index = ensure_index()
     store = get_vectorstore(ns)
     registry = DocumentRegistry()
+    describer = None
+    if describe_images if describe_images is not None else s.describe_images:
+        from .llm import get_llm
+        from .vision import make_page_describer
+        describer = make_page_describer(get_llm())
     report = {"namespace": ns, "files": [], "warnings": [], "errors": []}
     for path, name in files:
         try:
-            docs, warnings = load_file(path, name)
+            docs, warnings = load_file(path, name, describe_page=describer)
         except DocuPilotError as e:
             report["errors"].append(str(e))
             say(f"  ✗ {e}")
@@ -233,3 +283,55 @@ def ingest_paths(paths: list[Path], namespace: str | None = None, names: list[st
         report["files"].append({"file": name, "chunks": len(chunks), "replaced": removed})
         say(f"  ✓ {name}: {len(chunks)} chunks" + (f" (replaced {removed})" if removed else ""))
     return report
+
+
+def restore_from_pinecone(namespace: str | None = None, force: bool = False,
+                          progress: Callable[[str], None] | None = None) -> dict:
+    """Rebuild the local registry (document list, keyword-search chunks, whole-document text)
+    from the vectors already stored in Pinecone.
+
+    Cloud hosts such as Streamlit Community Cloud wipe local files on restart; Pinecone keeps
+    every chunk's text and metadata, so nothing has to be uploaded again.
+    """
+    from .vectorstore import ensure_index
+
+    s = get_settings()
+    ns = namespace or s.pinecone_namespace
+    say = progress or print
+    index = ensure_index()
+    registry = DocumentRegistry()
+    known = set(registry.list(ns))
+
+    ids: list[str] = []
+    for batch in index.list(namespace=ns):
+        ids += list(batch)
+    by_source: dict[str, list[Document]] = {}
+    for i in range(0, len(ids), 100):
+        res = index.fetch(ids=ids[i:i + 100], namespace=ns)
+        vectors = res.vectors if hasattr(res, "vectors") else res["vectors"]
+        for v in vectors.values():
+            meta = dict((v.metadata if hasattr(v, "metadata") else v["metadata"]) or {})
+            text = meta.pop("text", "")
+            src = meta.get("source")
+            if src and text:
+                by_source.setdefault(src, []).append(Document(text, metadata=meta))
+
+    from .keyword_search import as_int
+
+    restored = []
+    for src, chunks in sorted(by_source.items()):
+        if src in known and not force:
+            continue
+        for c in chunks:
+            for k in ("chunk", "page", "page_end"):
+                if k in c.metadata:
+                    c.metadata[k] = as_int(c.metadata[k])
+        chunks.sort(key=lambda c: c.metadata.get("chunk", 0))
+        last_page = max((c.metadata.get("page_end") or c.metadata.get("page") or 0) for c in chunks) or None
+        text = "\n\n".join(c.page_content for c in chunks)  # neighbours overlap by ~150 characters
+        registry.add(ns, src, text, pages=last_page, chunks=len(chunks), summary=None)
+        registry.save_chunks(ns, src, chunks)
+        restored.append({"file": src, "chunks": len(chunks)})
+        say(f"  ✓ restored {src}: {len(chunks)} chunks")
+    return {"namespace": ns, "vectors": len(ids), "restored": restored,
+            "skipped": sorted(set(by_source) & known) if not force else []}

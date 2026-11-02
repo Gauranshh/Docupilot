@@ -9,6 +9,9 @@
     python -m docupilot.cli stats
     python -m docupilot.cli graph                              # print the workflow as Mermaid
     python -m docupilot.cli train-router                       # retrain the question-router model
+    python -m docupilot.cli ingest slides.pdf --describe-images  # also read pictures on low-text pages
+    python -m docupilot.cli restore                            # rebuild local data from Pinecone
+    python -m docupilot.cli cache-clear                        # forget cached answers
 """
 from __future__ import annotations
 
@@ -45,6 +48,8 @@ def main() -> None:
     pi = sub.add_parser("ingest", help="Index files or folders into Pinecone")
     pi.add_argument("paths", nargs="+", type=Path)
     pi.add_argument("--namespace", default=None)
+    pi.add_argument("--describe-images", action="store_true",
+                    help="Read pages that are mostly pictures with the AI model (1 call per page)")
 
     pa = sub.add_parser("ask", help="Ask a single question")
     pa.add_argument("question")
@@ -73,13 +78,21 @@ def main() -> None:
 
     pt = sub.add_parser("train-router", help="Train the question-router model on data/router_train.csv")
     pt.add_argument("--data", type=Path, default=None)
+    pt.add_argument("--no-learned", action="store_true", help="Ignore examples learned from real use")
+
+    pr = sub.add_parser("restore", help="Rebuild the local document list and keyword index from Pinecone")
+    pr.add_argument("--namespace", default=None)
+    pr.add_argument("--force", action="store_true", help="Also rebuild documents that are already listed")
+
+    sub.add_parser("cache-clear", help="Delete all cached answers")
 
     args = p.parse_args()
 
     try:
         if args.cmd == "ingest":
             from .ingest import ingest_paths
-            report = ingest_paths(args.paths, namespace=args.namespace)
+            report = ingest_paths(args.paths, namespace=args.namespace,
+                                  describe_images=True if args.describe_images else None)
             for w in report["warnings"]:
                 print(f"  ! {w}")
             total = sum(f["chunks"] for f in report["files"])
@@ -106,14 +119,27 @@ def main() -> None:
                 print(f"{k:>22}: {v}")
 
         elif args.cmd == "train-router":
-            from .router_model import DEFAULT_DATA, DEFAULT_MODEL, train
-            m = train(args.data or DEFAULT_DATA, DEFAULT_MODEL)
-            print(f"Trained on {m['examples']} labelled questions {m['per_label']}")
+            from .router_model import DEFAULT_DATA, DEFAULT_MODEL, learned_path, train
+            m = train(args.data or DEFAULT_DATA, DEFAULT_MODEL, learned=None if args.no_learned else learned_path())
+            print(f"Trained on {m['examples']} labelled questions {m['per_label']}"
+                  + (f", including {m['learned_examples']} learned from real use" if m["learned_examples"] else ""))
             print(f"  held-out accuracy      : {m['holdout_accuracy']:.1%} ({m['holdout_size']} questions)")
             print(f"  5-fold CV accuracy     : {m['cv5_accuracy_mean']:.1%} ± {m['cv5_accuracy_std']:.1%}")
             for th, v in m["confident_cv"].items():
                 print(f"  confidence ≥ {th}       : handles {v['coverage']:.0%} of questions at {v['accuracy']:.1%} accuracy")
             print(f"Saved {DEFAULT_MODEL}")
+
+        elif args.cmd == "restore":
+            from .ingest import restore_from_pinecone
+            r = restore_from_pinecone(args.namespace, force=args.force)
+            print(f"Pinecone holds {r['vectors']} vectors in '{r['namespace']}'; restored {len(r['restored'])} document(s)"
+                  + (f", {len(r['skipped'])} already listed" if r["skipped"] else ""))
+
+        elif args.cmd == "cache-clear":
+            from .cache import AnswerCache
+            from .config import get_settings
+            s = get_settings()
+            print(f"Deleted {AnswerCache(s.data_dir / 'cache.sqlite').clear()} cached answers")
 
         elif args.cmd == "graph":
             from .graph import DocuPilot

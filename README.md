@@ -1,6 +1,6 @@
 # 🧭 DocuPilot — Agentic RAG for Document Q&A
 
-[![tests](https://img.shields.io/badge/tests-53%20passing-brightgreen)](#testing--evaluation)
+[![tests](https://img.shields.io/badge/tests-67%20passing-brightgreen)](#testing--evaluation)
 ![python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
 ![stack](https://img.shields.io/badge/stack-LangGraph%20%C2%B7%20Pinecone%20%C2%B7%20Gemini%2FOpenAI-purple)
 
@@ -26,7 +26,9 @@ It is built with **Pinecone** (vector database + hosted reranker) and **LangGrap
 
 - 📄 **Ingest PDF / Markdown / text** from the UI or CLI. Re-ingesting a file replaces its old vectors instead of duplicating them.
 - 🧠 **LLM summary per document** at ingest time, shown in the sidebar and used by the router.
-- 🔍 **Detects scanned PDFs** (no selectable text) and warns about image-only pages.
+- 🖼 **Reads pictures on pages**: diagrams, tables, worked examples and scanned pages are read by Gemini at ingest (opt-in, 1 AI call per page) so their content becomes searchable.
+- ⚡ **Answer cache**: a repeated question is answered instantly with no AI calls; cleared automatically when documents change.
+- ⌨️ **Streaming answers**: the answer appears word by word while it is written.
 - 📚 **Citations** `[1]`. Sources the answer actually cites are shown first; the others are listed as "also retrieved".
 - ✅ **Verification badge** for answers that passed the grounding check.
 - 🔎 **Live agent trace** showing every decision the graph made.
@@ -34,6 +36,8 @@ It is built with **Pinecone** (vector database + hosted reranker) and **LangGrap
 - 💬 **Saved conversations** (SQLite checkpointer). Reopen or delete past chats; export as Markdown.
 - 👍👎 **Feedback** logged to `storage/feedback.jsonl`, which can be reused as new eval cases.
 - 🛡 **Robustness**: automatic retry with backoff on rate limits, friendly error messages (no raw tracebacks), input validation, prompt-injection guard.
+- 🧠 **Router that keeps learning**: when the trained router is unsure, the AI's decision is saved as a new example; retrain from the sidebar.
+- ♻️ **Restore from Pinecone**: rebuild the document list and keyword index from stored chunks (for fresh installs and cloud restarts).
 - 🔌 **Provider-agnostic**: Gemini (free tier) or OpenAI, picked automatically from your keys; the chat model can be switched in the sidebar.
 
 ## Architecture
@@ -84,7 +88,7 @@ docupilot/
 ├── eval/                     # 29-question eval set + harness → JSON/Markdown reports
 ├── data/router_train.csv     # 190 labelled questions for the router model
 ├── models/router.joblib      # the trained router (+ router.metrics.json)
-├── tests/                    # 53 offline tests (no API keys needed)
+├── tests/                    # 67 offline tests (no API keys needed)
 ├── Dockerfile · .github/workflows/tests.yml
 ```
 
@@ -113,6 +117,10 @@ python -m docupilot.cli docs                 # list documents
 python -m docupilot.cli delete leave_policy.md
 python -m docupilot.cli stats
 python -m docupilot.cli graph                # Mermaid diagram of the compiled graph
+python -m docupilot.cli ingest slides.pdf --describe-images   # also read pictures on low-text pages
+python -m docupilot.cli restore              # rebuild local data from Pinecone
+python -m docupilot.cli train-router         # retrain the router, including examples learned from use
+python -m docupilot.cli cache-clear          # forget cached answers
 ```
 
 ### Example (illustrative)
@@ -168,7 +176,7 @@ e.g. `pp.18–22`), so a 97-slide deck becomes about 20 context-rich chunks inst
 ## Testing & evaluation
 
 ```bash
-pytest -q                          # 53 offline tests, ~5 s, no keys needed
+pytest -q                          # 67 offline tests, ~7 s, no keys needed
 python eval/run_eval.py --delay 4  # live evaluation against your index
 ```
 
@@ -187,7 +195,23 @@ Use it to compare settings, e.g. `RERANK=false` vs `true`, or different `CHUNK_S
 
 ## Deployment
 
-- **Streamlit Community Cloud** (free): push to GitHub → share.streamlit.io → New app → `app.py`, then add the `.env` values under *Secrets*.
+### Streamlit Community Cloud (free public link)
+
+1. Sign in at **share.streamlit.io** with GitHub → **Create app** → pick this repository, branch `main`, file `app.py`.
+2. Under **Advanced settings → Secrets**, paste your keys in TOML form (Streamlit exposes them as environment variables):
+   ```toml
+   PINECONE_API_KEY = "pcsk_..."
+   GOOGLE_API_KEY = "AIza..."
+   PINECONE_INDEX = "docupilot-gemini"
+   PINECONE_NAMESPACE = "handbook"
+   ```
+3. Deploy. Your documents are already in Pinecone, so open the app and click **♻️ Restore from Pinecone** once.
+
+Cloud hosts wipe local files when the app restarts or sleeps: saved chats, the answer cache and router-learning
+examples start empty again, and the document list comes back with one click on **Restore from Pinecone**.
+Anyone with the link uses *your* API quota, so keep the link private or add Streamlit's viewer authentication.
+
+### Other options
 - **Docker:** `docker build -t docupilot . && docker run -p 8501:8501 --env-file .env docupilot`
 - **Tracing:** set `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY` to see every graph run in LangSmith.
 
@@ -199,6 +223,10 @@ Free Gemini tiers can be as low as ~20 requests per day per model. DocuPilot kee
 - **Specific questions** cost 3–4 calls (route, grade, answer, verify). Set `VERIFY_ANSWERS=false` to save one.
 - Point `GRADER_MODEL` at a cheaper model with a higher quota; check your limits at aistudio.google.com/rate-limit.
 - Quota errors are reported precisely: per-minute limits are retried automatically; daily limits show when they reset.
+- **Answer cache**: asking the same question again costs nothing.
+- **Trained router**: about 2 in 3 questions are routed without an AI call.
+- **Image reading** is opt-in because it costs 1 call per picture page (capped by `VISION_MAX_PAGES`); if the daily
+  quota runs out mid-file, the pages read so far are kept and the rest are indexed as text only.
 
 ## Configuration
 
@@ -212,9 +240,14 @@ All settings live in `.env` (see `.env.example`). The ones that matter most:
 | `RERANK` | true | Pinecone hosted reranker; falls back to vector order if unavailable |
 | `MAX_REWRITES` | 2 | corrective-RAG retries before giving up |
 | `FULL_DOC_CHAR_LIMIT` | 300 000 | above this, whole-document mode uses summaries + excerpts |
+| `DESCRIBE_IMAGES` / `VISION_MIN_CHARS` / `VISION_MAX_PAGES` | false / 80 / 40 | read pages with fewer than 80 characters of text with the AI model, at most 40 per file |
+| `HYBRID_SEARCH` / `MERGE_SHORT_PAGES` | true / true | BM25 + vector search; merge short slide pages before chunking |
+| `TRAINED_ROUTER` / `ROUTER_MIN_CONFIDENCE` / `ROUTER_LEARNING` | true / 0.7 / true | trained router, its trust threshold, learning from the LLM router |
+| `ANSWER_CACHE` / `CACHE_TTL_HOURS` | true / 168 | reuse answers to repeated questions for up to a week |
 
 ## Limitations & future work
 
-- Scanned PDFs need OCR (currently detected and rejected with a clear message).
+- Image reading is opt-in and costs one AI call per picture page; very large scanned books exceed the free tier.
 - Whole-document mode is bounded by the model's context window. Very large collections fall back to summaries.
-- Possible next steps: OCR for image-only slides, table extraction, token streaming, user authentication and per-user namespaces.
+- On free cloud hosting, chats, the cache and learned router examples reset on restart (documents restore from Pinecone).
+- Possible next steps: table extraction into structured rows, a hosted database for chats, user authentication and per-user namespaces.
