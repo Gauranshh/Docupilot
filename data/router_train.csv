@@ -1,0 +1,191 @@
+label,question
+retrieve,How many days of earned leave do I get per year?
+retrieve,What is the hotel limit per night in Mumbai?
+retrieve,Can I carry forward unused casual leave?
+retrieve,When do I need a medical certificate for sick leave?
+retrieve,How long is maternity leave?
+retrieve,What is the daily allowance for international travel?
+retrieve,Within how many days should I submit an expense claim?
+retrieve,Is alcohol reimbursed at client dinners?
+retrieve,Which days are anchor days in the office?
+retrieve,How long can I work from another country?
+retrieve,Who do I report a lost laptop to?
+retrieve,What is the minimum password length?
+retrieve,Are personal devices allowed for customer data?
+retrieve,What happens if I take leave without approval?
+retrieve,How much is the internet reimbursement each month?
+retrieve,What class can I fly on a 7 hour flight?
+retrieve,Is laundry reimbursed on a 3 night trip?
+retrieve,How is loss of pay calculated?
+retrieve,What is the per km rate for using my own car?
+retrieve,Do I need receipts for the daily allowance?
+retrieve,Who approves my leave requests?
+retrieve,How many public holidays are there?
+retrieve,What is the bereavement leave policy?
+retrieve,Can interns use this leave policy?
+retrieve,Which AI tools am I allowed to use with customer data?
+retrieve,How often are laptops refreshed for engineers?
+retrieve,What should I do if I receive a phishing email?
+retrieve,Is VPN required on public wifi?
+retrieve,What is the home office allowance for new joiners?
+retrieve,When does the leave year start?
+retrieve,Who described machine learning in 1959?
+retrieve,What is supervised learning?
+retrieve,What is the difference between classification and clustering?
+retrieve,What does information gain measure?
+retrieve,How is entropy used in decision trees?
+retrieve,Which distance measure does K-Means use?
+retrieve,What is C4.5?
+retrieve,Why is finding the best decision tree NP-hard?
+retrieve,What are the stopping conditions for building a decision tree?
+retrieve,What is inductive learning?
+retrieve,What is DBSCAN?
+retrieve,How does the K-Means update step work?
+retrieve,What are applications of clustering?
+retrieve,What is the fundamental assumption of learning?
+retrieve,How is accuracy calculated in the slides?
+retrieve,What is the IEEE definition of software?
+retrieve,What are the attributes of good software?
+retrieve,What is legacy software?
+retrieve,What are customer myths in software engineering?
+retrieve,What is the difference between generic and bespoke software?
+retrieve,Does software wear out like hardware?
+retrieve,What is shareware?
+retrieve,What is embedded software?
+retrieve,Why is software engineering important?
+retrieve,What does question 3 ask?
+retrieve,What is the deadline for the assignment?
+retrieve,How many marks is question 2 worth?
+retrieve,What format should the submission be in?
+retrieve,Which dataset should we use for part B?
+retrieve,What is the word limit for the report?
+retrieve,Is late submission allowed?
+retrieve,What programming language is required?
+retrieve,Explain the second step of the algorithm
+retrieve,What does the term overfitting mean here?
+retrieve,Define precision as used in the notes
+retrieve,What example is used to explain decision trees?
+retrieve,What is the formula for gain ratio?
+retrieve,Which page talks about recursion?
+retrieve,What does the warranty cover?
+retrieve,How do I reset the device to factory settings?
+retrieve,What is the return window for orders?
+retrieve,What is the notice period for resignation?
+retrieve,Who is the owner of the travel policy?
+retrieve,What is the refund policy for cancelled trips?
+retrieve,What does section 4 say about approvals?
+retrieve,how much leave for fathers
+retrieve,and what about sick leave?
+retrieve,is wfh allowed on fridays
+retrieve,limit for hotels outside metro cities
+retrieve,cab reimbursement rules
+retrieve,what is k in k means
+retrieve,meaning of pure subset in decision tree
+retrieve,which myth says a general statement of objectives is enough
+retrieve,can i expense a premium cab
+retrieve,what counts as restricted data
+retrieve,when are claims paid
+retrieve,who are the stakeholders mentioned
+retrieve,What risks does the report mention?
+retrieve,What is the API rate limit in the documentation?
+retrieve,Which version of Python does the guide require?
+retrieve,What are the prerequisites for the course?
+retrieve,How is the final grade calculated?
+retrieve,What is the attendance requirement?
+retrieve,Where is the exam held?
+retrieve,What is the penalty for plagiarism?
+document,Summarize the leave policy
+document,Summarise this document
+document,Give me an overview of the travel policy
+document,What is this PDF about?
+document,How many questions are in this assignment?
+document,How many sections does the remote work policy have?
+document,List every type of leave in the policy
+document,List all the topics covered in Unit 5
+document,What are the main points of these slides?
+document,Give me the key takeaways from the document
+document,Can you outline the structure of this report?
+document,How long will it take me to complete this assignment?
+document,Make a summary of the Unit 1 slides
+document,TLDR of the handbook
+document,Give me a short overview of everything in the knowledge base
+document,What topics does the course material cover?
+document,How many pages does the document have?
+document,Summarize all the policies in bullet points
+document,Compare the leave policy and the travel policy
+document,What are all the deadlines mentioned in the document?
+document,List all the formulas in the slides
+document,How many slides are about clustering?
+document,What is the overall purpose of this guideline?
+document,Explain the whole document in simple words
+document,Create a study summary of Unit 5
+document,What chapters are in this book?
+document,Give me the gist of the assignment brief
+document,List every rule about expenses
+document,Which sections talk about security?
+document,How many tasks do I need to submit?
+document,Can you summarize the key points for my exam?
+document,Write a one paragraph summary of each document
+document,What are the main differences between all three policies?
+document,Give me an outline of the Unit 1 lecture
+document,Count how many types of software are listed
+document,list all the myths mentioned
+document,summary pls
+document,summarize the pdf
+document,what is this file about
+document,overview of everything uploaded
+document,make notes from the whole unit
+document,break down the full assignment for me
+document,what all is covered in these slides
+document,give me all the important points
+document,how many questions are there
+document,how many marks in total
+document,estimate how much time this assignment needs
+document,what are the main ideas of the course material
+document,summarize section by section
+document,list all the examples used in the slides
+document,What are all the policies about working remotely?
+document,Give me a complete list of reimbursable expenses
+document,Prepare revision notes from the entire document
+document,Describe the structure of the knowledge base
+document,What does the document cover from start to end?
+direct,hi
+direct,hello
+direct,hey there
+direct,good morning
+direct,thanks
+direct,thank you so much
+direct,thanks a lot that helped
+direct,ok
+direct,okay cool
+direct,bye
+direct,who are you?
+direct,what can you do?
+direct,how can you help me?
+direct,what is DocuPilot?
+direct,are you an AI?
+direct,how do I use this app?
+direct,what kind of questions can I ask?
+direct,nice work
+direct,great answer
+direct,can you help me?
+direct,hello DocuPilot
+direct,good evening
+direct,what documents do you have?
+direct,which files are uploaded?
+direct,how are you?
+direct,that's all for now
+direct,see you later
+direct,awesome thanks
+direct,cool
+direct,hii
+direct,yo
+direct,thank u
+direct,Hi! What can you help me with?
+direct,Hello, who made you?
+direct,what languages do you speak?
+direct,do you remember my last question?
+direct,can I upload a pdf?
+direct,how do I start a new chat?
+direct,got it
+direct,perfect

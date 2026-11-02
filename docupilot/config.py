@@ -62,6 +62,8 @@ class Settings:
     # Chunking & retrieval
     chunk_size: int = field(default_factory=lambda: int(_env("CHUNK_SIZE", "1000")))
     chunk_overlap: int = field(default_factory=lambda: int(_env("CHUNK_OVERLAP", "150")))
+    merge_short_pages: bool = field(default_factory=lambda: _bool("MERGE_SHORT_PAGES", True))   # slide decks
+    hybrid_search: bool = field(default_factory=lambda: _bool("HYBRID_SEARCH", True))           # BM25 + vectors
     fetch_k: int = field(default_factory=lambda: int(_env("FETCH_K", "20")))      # candidates from Pinecone
     top_k: int = field(default_factory=lambda: int(_env("TOP_K", "5")))           # kept after reranking
     min_score: float = field(default_factory=lambda: float(_env("MIN_SCORE", "0.0")))
@@ -80,6 +82,9 @@ class Settings:
     keyword_routing: bool = field(default_factory=lambda: _bool("KEYWORD_ROUTING", True))   # skip router LLM for obvious cases
     verify_answers: bool = field(default_factory=lambda: _bool("VERIFY_ANSWERS", True))     # Self-RAG grounding check
     verify_document_answers: bool = field(default_factory=lambda: _bool("VERIFY_DOCUMENT_ANSWERS", False))
+    # Trained question router (models/router.joblib): used before the LLM router when confident
+    trained_router: bool = field(default_factory=lambda: _bool("TRAINED_ROUTER", True))
+    router_min_confidence: float = field(default_factory=lambda: float(_env("ROUTER_MIN_CONFIDENCE", "0.7")))
 
     # Optional web-search fallback (Tavily). Off automatically when no key is set.
     tavily_api_key: str | None = field(default_factory=lambda: os.getenv("TAVILY_API_KEY"))

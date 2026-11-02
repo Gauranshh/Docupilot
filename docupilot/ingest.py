@@ -81,6 +81,38 @@ def _section_title(text: str) -> str | None:
     return None
 
 
+def merge_short_pages(docs: list[Document], target: int) -> list[Document]:
+    """Slide decks have many short pages (our Unit 5 deck averages ~170 characters per slide).
+    One chunk per slide gives the search engine too little context, so consecutive pages are
+    merged until a block reaches `target` characters. Each block keeps its page range
+    (`page` .. `page_end`) so citations still say "pp. 12–15"."""
+    if not docs or "page" not in docs[0].metadata:
+        return docs
+    merged: list[Document] = []
+    buf: list[Document] = []
+
+    def flush():
+        if not buf:
+            return
+        text = "\n\n".join(f"[Page {d.metadata['page']}]\n{d.page_content}" for d in buf) if len(buf) > 1 else buf[0].page_content
+        meta = {**buf[0].metadata}
+        if len(buf) > 1:
+            meta["page_end"] = buf[-1].metadata["page"]
+        merged.append(Document(text, metadata=meta))
+        buf.clear()
+
+    size = 0
+    for d in docs:
+        n = len(d.page_content)
+        if buf and size + n > target:
+            flush()
+            size = 0
+        buf.append(d)
+        size += n
+    flush()
+    return merged
+
+
 def chunk_documents(docs: list[Document]) -> list[Document]:
     s = get_settings()
     splitter = RecursiveCharacterTextSplitter(
@@ -88,6 +120,8 @@ def chunk_documents(docs: list[Document]) -> list[Document]:
         chunk_overlap=s.chunk_overlap,
         separators=["\n## ", "\n### ", "\n\n", "\n", ". ", " ", ""],
     )
+    if s.merge_short_pages:
+        docs = merge_short_pages(docs, int(s.chunk_size * 0.9))  # room for the [Page n] markers
     chunks = splitter.split_documents(docs)
     counters: dict[str, int] = {}
     last_section: dict[str, str] = {}
@@ -195,6 +229,7 @@ def ingest_paths(paths: list[Path], namespace: str | None = None, names: list[st
         summary = summarize(text, name) if s.summarize_on_ingest else None
         registry.add(ns, name, text, pages=sum(1 for d in docs if "page" in d.metadata) or None,
                      chunks=len(chunks), summary=summary)
+        registry.save_chunks(ns, name, chunks)
         report["files"].append({"file": name, "chunks": len(chunks), "replaced": removed})
         say(f"  ✓ {name}: {len(chunks)} chunks" + (f" (replaced {removed})" if removed else ""))
     return report

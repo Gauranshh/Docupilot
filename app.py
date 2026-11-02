@@ -254,7 +254,8 @@ def render_extras(res: dict | None, idx: int) -> None:
             for c in cited or cards:
                 score = f" · relevance {c['score']}" if c.get("score") is not None else ""
                 icon = "🌐" if c["origin"] == "web" else "📄"
-                st.markdown(f"**[{c['n']}] {icon} {c['label']}**{score}")
+                via = f" · found by {' + '.join(c['found_by'])}" if c.get("found_by") else ""
+                st.markdown(f"**[{c['n']}] {icon} {c['label']}**{score}{via}")
                 st.caption(c["snippet"] + ("…" if len(c["snippet"]) >= 400 else ""))
             if cited and other:
                 st.caption("Also retrieved but not cited: " + ", ".join(f"[{c['n']}] {c['label']}" for c in other))

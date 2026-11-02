@@ -64,7 +64,36 @@ class DocumentRegistry:
             }
             self._save(data)
 
+    def _chunks_path(self, namespace: str, name: str) -> Path:
+        return self.root / "chunks" / _safe(namespace) / f"{_safe(name)}.json"
+
+    def save_chunks(self, namespace: str, name: str, chunks: list[Document]) -> None:
+        """Keep a local copy of a file's chunks for keyword (BM25) search."""
+        p = self._chunks_path(namespace, name)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        rows = [{"text": c.page_content, "metadata": c.metadata} for c in chunks]
+        p.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+
+    def load_chunks(self, namespace: str) -> list[Document]:
+        folder = self.root / "chunks" / _safe(namespace)
+        docs: list[Document] = []
+        for p in sorted(folder.glob("*.json")) if folder.exists() else []:
+            try:
+                rows = json.loads(p.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                continue
+            docs += [Document(r["text"], metadata=r["metadata"]) for r in rows]
+        return docs
+
+    def chunks_signature(self, namespace: str) -> tuple:
+        """Changes whenever a chunk file is added, replaced or removed (used to rebuild BM25)."""
+        folder = self.root / "chunks" / _safe(namespace)
+        if not folder.exists():
+            return ()
+        return tuple(sorted((p.name, p.stat().st_mtime_ns) for p in folder.glob("*.json")))
+
     def remove(self, namespace: str, name: str) -> None:
+        self._chunks_path(namespace, name).unlink(missing_ok=True)
         self._text_path(namespace, name).unlink(missing_ok=True)
         with _LOCK:
             data = self._load()

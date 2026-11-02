@@ -91,24 +91,68 @@ def rerank(query: str, docs: list[Document], top_n: int) -> list[Document]:
         return docs[:top_n]
 
 
-def make_pinecone_retriever(namespace: str | None = None) -> Retriever:
-    """Similarity search (+ optional source filter) → rerank; keeps scores for transparency."""
-    store = get_vectorstore(namespace)
-    s = get_settings()
+class KeywordIndex:
+    """BM25 over the chunks saved by ingestion; rebuilt automatically when files change."""
+
+    def __init__(self, namespace: str, registry=None):
+        from .registry import DocumentRegistry
+
+        self.namespace = namespace
+        self.registry = registry or DocumentRegistry()
+        self._sig = None
+        self._index = None
+
+    def get(self):
+        from .keyword_search import BM25Index
+
+        sig = self.registry.chunks_signature(self.namespace)
+        if sig != self._sig:
+            self._index = BM25Index(self.registry.load_chunks(self.namespace))
+            self._sig = sig
+        return self._index
+
+
+def make_hybrid_retriever(dense, keyword_index=None, settings=None, reranker=None) -> Retriever:
+    """Vector search + BM25 keyword search, fused with Reciprocal Rank Fusion, then reranked.
+
+    `dense(query, k, sources) -> list[Document]` is the vector search; injectable for tests.
+    """
+    from .keyword_search import reciprocal_rank_fusion
+
+    s = settings or get_settings()
+    do_rerank = reranker if reranker is not None else (rerank if s.rerank else None)
 
     def retrieve(query: str, k: int, sources: list[str] | None = None) -> list[Document]:
+        fetch = max(s.fetch_k, k)
+        lists = {"vector": dense(query, fetch, sources)}
+        index = keyword_index.get() if (keyword_index is not None and s.hybrid_search) else None
+        if index is not None and len(index):
+            lists["keyword"] = [d for d, _ in index.search(query, fetch, sources)]
+        fused = reciprocal_rank_fusion(lists, limit=fetch) if len(lists) > 1 else lists["vector"]
+        for d in fused:
+            d.metadata.setdefault("found_by", ["vector"])
+        return do_rerank(query, fused, k) if do_rerank else fused[:k]
+
+    return retrieve
+
+
+def make_pinecone_retriever(namespace: str | None = None) -> Retriever:
+    """Hybrid retrieval: Pinecone vectors (+ optional source filter) and BM25 keywords → RRF → rerank."""
+    s = get_settings()
+    ns = namespace or s.pinecone_namespace
+    store = get_vectorstore(ns)
+
+    def dense(query: str, k: int, sources: list[str] | None = None) -> list[Document]:
         flt = {"source": {"$in": list(sources)}} if sources else None
-        fetch = max(s.fetch_k, k) if s.rerank else k
-        results = store.similarity_search_with_score(query, k=fetch, filter=flt)
         docs = []
-        for doc, score in results:
+        for doc, score in store.similarity_search_with_score(query, k=k, filter=flt):
             if score < s.min_score:
                 continue
             doc.metadata["score"] = round(float(score), 4)
             docs.append(doc)
-        return rerank(query, docs, k) if s.rerank else docs[:k]
+        return docs
 
-    return retrieve
+    return make_hybrid_retriever(dense, KeywordIndex(ns) if s.hybrid_search else None, s)
 
 
 def index_stats(namespace: str | None = None) -> dict:

@@ -1,6 +1,6 @@
 # 🧭 DocuPilot — Agentic RAG for Document Q&A
 
-[![tests](https://img.shields.io/badge/tests-39%20passing-brightgreen)](#testing--evaluation)
+[![tests](https://img.shields.io/badge/tests-53%20passing-brightgreen)](#testing--evaluation)
 ![python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
 ![stack](https://img.shields.io/badge/stack-LangGraph%20%C2%B7%20Pinecone%20%C2%B7%20Gemini%2FOpenAI-purple)
 
@@ -17,7 +17,8 @@ It is built with **Pinecone** (vector database + hosted reranker) and **LangGrap
 | **Adaptive RAG** (3-way routing) | `retrieve` for specific facts, `document` for whole-document questions (summaries, counts, overviews), `direct` for small talk |
 | **Corrective RAG** | An LLM grader drops irrelevant chunks → if nothing useful is left the query is rewritten and retried → optional web fallback |
 | **Self-RAG** | A verifier checks every claim against the sources; unsupported answers are regenerated with stricter instructions, then flagged if still unverified |
-| **Two-stage retrieval** | Dense search for 20 candidates → Pinecone cross-encoder reranker (`bge-reranker-v2-m3`) → best 5 |
+| **Hybrid retrieval** | Vector search (Pinecone) **and** BM25 keyword search, merged with Reciprocal Rank Fusion, then a cross-encoder reranker (`bge-reranker-v2-m3`) keeps the best 5 |
+| **Trained question router** | A scikit-learn model trained on 190 labelled questions routes ~2 in 3 questions with 97.6% accuracy and no LLM call; unsure cases go to the LLM router |
 | **Metadata filtering** | "Search only in" specific files via Pinecone filters |
 | **Conversation memory** | Follow-ups ("and for fathers?") are rewritten into standalone questions; chats persist in SQLite |
 
@@ -70,7 +71,9 @@ docupilot/
 │   ├── graph.py              # the LangGraph workflow + DocuPilot API (the core)
 │   ├── ingest.py             # load → validate → chunk → embed → upsert → summarise
 │   ├── vectorstore.py        # Pinecone index, filtered retrieval, reranking, stats
-│   ├── registry.py           # per-document summaries + full text for whole-document mode
+│   ├── registry.py           # per-document summaries, full text and chunks (for keyword search)
+│   ├── router_model.py       # trained question router: TF-IDF + logistic regression
+│   ├── keyword_search.py     # BM25 keyword search + Reciprocal Rank Fusion
 │   ├── chats.py              # persistent conversations + feedback log
 │   ├── errors.py             # retry policy + user-friendly error messages
 │   ├── prompts.py            # every prompt in one place
@@ -79,7 +82,9 @@ docupilot/
 │   ├── llm.py · web.py · cli.py
 ├── data/sample/              # demo handbook for a fictional company (Northwind Labs)
 ├── eval/                     # 29-question eval set + harness → JSON/Markdown reports
-├── tests/                    # 39 offline tests (no API keys needed)
+├── data/router_train.csv     # 190 labelled questions for the router model
+├── models/router.joblib      # the trained router (+ router.metrics.json)
+├── tests/                    # 53 offline tests (no API keys needed)
 ├── Dockerfile · .github/workflows/tests.yml
 ```
 
@@ -127,10 +132,43 @@ you › What is our stock option vesting schedule?      ← not in the documents
 I couldn't find this in the knowledge base. …
 ```
 
+## The trained question router
+
+Every question first needs a strategy: look up a fact, read a whole document, or just reply.
+Asking the LLM costs an API call, and free tiers allow only about 20 calls a day, so DocuPilot
+ships a small model **trained on our own labelled data** that decides in about a millisecond:
+
+- **Data:** `data/router_train.csv`, 190 questions labelled `retrieve` (95), `document` (55) or `direct` (40),
+  covering policies, lecture notes, assignments and small talk, including typos and short forms.
+- **Model:** TF-IDF on word 1–2-grams + character 2–5-grams → logistic regression (scikit-learn).
+- **Results:**
+
+| Measure | Result |
+|---|---|
+| Held-out accuracy (48 unseen questions) | 87.5% |
+| 5-fold cross-validation accuracy | 85.3% ± 2.7% |
+| When confidence ≥ 0.7 (the default) | handles 66% of questions at **97.6%** accuracy |
+
+Below the confidence threshold the LLM router decides, so uncertain questions are never guessed.
+Add your own examples to the CSV and retrain with `python -m docupilot.cli train-router`.
+
+## Hybrid search
+
+Vector search matches *meaning* ("leave for new fathers" finds "paternity leave") but can miss exact
+terms such as `C4.5`, `B134` or `Section 3.4`. DocuPilot also keeps a **BM25 keyword index** of every
+chunk and merges both ranked lists with **Reciprocal Rank Fusion** (score = Σ 1 / (60 + rank)), before
+the reranker picks the best 5. Each source in the app shows whether it was *found by vector, keyword or both*.
+
+**Slide decks:** consecutive short PDF pages are merged before chunking (citations keep the page range,
+e.g. `pp.18–22`), so a 97-slide deck becomes about 20 context-rich chunks instead of 97 tiny ones.
+
+> **Upgrading:** re-run `python -m docupilot.cli ingest ...` once so existing documents get keyword-search
+> chunks and merged slide pages. Until then, search falls back to vectors only.
+
 ## Testing & evaluation
 
 ```bash
-pytest -q                          # 39 offline tests, ~4 s, no keys needed
+pytest -q                          # 53 offline tests, ~5 s, no keys needed
 python eval/run_eval.py --delay 4  # live evaluation against your index
 ```
 
@@ -179,4 +217,4 @@ All settings live in `.env` (see `.env.example`). The ones that matter most:
 
 - Scanned PDFs need OCR (currently detected and rejected with a clear message).
 - Whole-document mode is bounded by the model's context window. Very large collections fall back to summaries.
-- Possible next steps: hybrid sparse+dense search for exact codes, table extraction, token streaming, user authentication and per-user namespaces.
+- Possible next steps: OCR for image-only slides, table extraction, token streaming, user authentication and per-user namespaces.

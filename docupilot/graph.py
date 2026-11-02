@@ -37,6 +37,7 @@ from langgraph.graph.message import add_messages
 from . import prompts
 from .config import Settings, get_settings
 from .errors import DocuPilotError, friendly_error, is_transient
+from .keyword_search import as_int
 from .schemas import GroundingGrade, RelevanceGrades, RewrittenQuery, RouteDecision, StandaloneQuestion
 from .vectorstore import Retriever
 from .web import WebSearch
@@ -44,6 +45,7 @@ from .web import WebSearch
 HISTORY_WINDOW = 6  # messages of history used to resolve follow-ups
 DocumentLoader = Callable[[list[str] | None], list[Document]]
 DocumentLister = Callable[[], dict[str, dict]]
+QuestionClassifier = Callable[[str], tuple[str, float]]  # question -> (route, confidence)
 
 
 class RAGState(TypedDict, total=False):
@@ -81,7 +83,8 @@ def _label(doc: Document) -> str:
     elif m.get("mode") == "summary+excerpt":
         parts.append("summary + excerpt")
     if m.get("page"):
-        parts.append(f"p.{m['page']}")
+        first, last = as_int(m["page"]), as_int(m.get("page_end"))
+        parts.append(f"pp.{first}–{last}" if last and last != first else f"p.{first}")
     if m.get("section"):
         parts.append(f"§ {m['section']}")
     return " · ".join(parts)
@@ -106,7 +109,8 @@ def _source_cards(docs: list[Document], answer: str) -> list[dict]:
             "n": i,
             "label": _label(d),
             "source": d.metadata.get("source"),
-            "page": d.metadata.get("page"),
+            "page": as_int(d.metadata.get("page")),
+            "found_by": d.metadata.get("found_by"),
             "score": d.metadata.get("rerank_score", d.metadata.get("score")),
             "origin": d.metadata.get("origin", "knowledge_base"),
             "cited": i in cited,
@@ -170,6 +174,7 @@ def build_graph(
     list_documents: DocumentLister | None = None,
     settings: Settings | None = None,
     checkpointer: Any | None = None,
+    classifier: QuestionClassifier | None = None,
 ):
     s = settings or get_settings()
     answer_llm = _retrying(llm)
@@ -192,9 +197,13 @@ def build_graph(
         }
 
     def route(state: RAGState) -> RAGState:
-        shortcut = keyword_route(state["standalone_question"]) if s.keyword_routing else None
+        question = state["standalone_question"]
+        shortcut = keyword_route(question) if s.keyword_routing else None
+        predicted, confidence = classifier(question) if (classifier and not shortcut) else (None, 0.0)
         if shortcut:
             choice, note = shortcut, f"route: {shortcut} (keyword shortcut, no LLM call)"
+        elif predicted and confidence >= s.router_min_confidence:
+            choice, note = predicted, f"route: {predicted} (trained router, confidence {confidence:.2f}, no LLM call)"
         else:
             system = prompts.ROUTER_SYSTEM.format(documents=_doc_listing(list_documents))
             d = router.invoke([SystemMessage(system), HumanMessage(state["standalone_question"])])
@@ -216,8 +225,14 @@ def build_graph(
         flt = state.get("sources_filter")
         docs = retriever(state["search_query"], s.top_k, flt)
         scope = f" in {flt}" if flt else ""
+        how = [tuple(d.metadata.get("found_by") or ()) for d in docs]
+        mix = ""
+        if any("keyword" in h for h in how):
+            both = sum(1 for h in how if len(h) > 1)
+            kw = sum(1 for h in how if h == ("keyword",))
+            mix = f" · hybrid: {len(docs) - both - kw} vector, {kw} keyword, {both} both"
         return {"documents": docs,
-                "trace": _add_trace(state, f"retrieved {len(docs)} chunks for '{state['search_query']}'{scope}")}
+                "trace": _add_trace(state, f"retrieved {len(docs)} chunks for '{state['search_query']}'{scope}{mix}")}
 
     def grade_documents(state: RAGState) -> RAGState:
         docs = state.get("documents", [])
@@ -346,6 +361,15 @@ def build_graph(
 
 # ---------- convenience wrapper ----------
 
+def _load_classifier(settings: Settings) -> QuestionClassifier | None:
+    if not settings.trained_router:
+        return None
+    from .router_model import TrainedRouter
+
+    model = TrainedRouter.load()
+    return model.predict if model else None
+
+
 class DocuPilot:
     """High-level API used by the CLI, the Streamlit app and the eval script."""
 
@@ -369,6 +393,7 @@ class DocuPilot:
                 document_loader=make_document_loader(ns, registry),
                 list_documents=lambda: registry.list(ns),
                 checkpointer=checkpointer,
+                classifier=_load_classifier(self.settings),
             )
         self.graph = graph
 

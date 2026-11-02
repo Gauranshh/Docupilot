@@ -8,6 +8,7 @@
     python -m docupilot.cli delete leave_policy.md             # remove a document
     python -m docupilot.cli stats
     python -m docupilot.cli graph                              # print the workflow as Mermaid
+    python -m docupilot.cli train-router                       # retrain the question-router model
 """
 from __future__ import annotations
 
@@ -70,6 +71,9 @@ def main() -> None:
 
     sub.add_parser("graph", help="Print the LangGraph workflow as Mermaid")
 
+    pt = sub.add_parser("train-router", help="Train the question-router model on data/router_train.csv")
+    pt.add_argument("--data", type=Path, default=None)
+
     args = p.parse_args()
 
     try:
@@ -100,6 +104,16 @@ def main() -> None:
             from .vectorstore import index_stats
             for k, v in index_stats(args.namespace).items():
                 print(f"{k:>22}: {v}")
+
+        elif args.cmd == "train-router":
+            from .router_model import DEFAULT_DATA, DEFAULT_MODEL, train
+            m = train(args.data or DEFAULT_DATA, DEFAULT_MODEL)
+            print(f"Trained on {m['examples']} labelled questions {m['per_label']}")
+            print(f"  held-out accuracy      : {m['holdout_accuracy']:.1%} ({m['holdout_size']} questions)")
+            print(f"  5-fold CV accuracy     : {m['cv5_accuracy_mean']:.1%} ± {m['cv5_accuracy_std']:.1%}")
+            for th, v in m["confident_cv"].items():
+                print(f"  confidence ≥ {th}       : handles {v['coverage']:.0%} of questions at {v['accuracy']:.1%} accuracy")
+            print(f"Saved {DEFAULT_MODEL}")
 
         elif args.cmd == "graph":
             from .graph import DocuPilot
