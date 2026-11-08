@@ -1,6 +1,6 @@
 # 🧭 DocuPilot — Agentic RAG for Document Q&A
 
-[![tests](https://img.shields.io/badge/tests-67%20passing-brightgreen)](#testing--evaluation)
+[![tests](https://img.shields.io/badge/tests-76%20passing-brightgreen)](#testing--evaluation)
 ![python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
 ![stack](https://img.shields.io/badge/stack-LangGraph%20%C2%B7%20Pinecone%20%C2%B7%20Gemini%2FOpenAI-purple)
 
@@ -24,7 +24,7 @@ It is built with **Pinecone** (vector database + hosted reranker) and **LangGrap
 
 ## Features
 
-- 📄 **Ingest PDF / Markdown / text** from the UI or CLI. Re-ingesting a file replaces its old vectors instead of duplicating them.
+- 📄 **Ingest PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx), CSV, HTML, Markdown and text** from the UI or CLI. Slides are cited by slide number, Word headings become sections, and tables are kept row by row. Re-ingesting a file replaces its old vectors instead of duplicating them.
 - 🧠 **LLM summary per document** at ingest time, shown in the sidebar and used by the router.
 - 🖼 **Reads pictures on pages**: diagrams, tables, worked examples and scanned pages are read by Gemini at ingest (opt-in, 1 AI call per page) so their content becomes searchable.
 - ⚡ **Answer cache**: a repeated question is answered instantly with no AI calls; cleared automatically when documents change.
@@ -74,6 +74,7 @@ docupilot/
 ├── docupilot/
 │   ├── graph.py              # the LangGraph workflow + DocuPilot API (the core)
 │   ├── ingest.py             # load → validate → chunk → embed → upsert → summarise
+│   ├── loaders.py            # Word, PowerPoint, Excel, CSV and HTML text extraction
 │   ├── vectorstore.py        # Pinecone index, filtered retrieval, reranking, stats
 │   ├── registry.py           # per-document summaries, full text and chunks (for keyword search)
 │   ├── router_model.py       # trained question router: TF-IDF + logistic regression
@@ -88,7 +89,7 @@ docupilot/
 ├── eval/                     # 29-question eval set + harness → JSON/Markdown reports
 ├── data/router_train.csv     # 190 labelled questions for the router model
 ├── models/router.joblib      # the trained router (+ router.metrics.json)
-├── tests/                    # 67 offline tests (no API keys needed)
+├── tests/                    # 76 offline tests (no API keys needed)
 ├── Dockerfile · .github/workflows/tests.yml
 ```
 
@@ -118,6 +119,7 @@ python -m docupilot.cli delete leave_policy.md
 python -m docupilot.cli stats
 python -m docupilot.cli graph                # Mermaid diagram of the compiled graph
 python -m docupilot.cli ingest slides.pdf --describe-images   # also read pictures on low-text pages
+python -m docupilot.cli ingest lecture.pptx notes.docx marks.xlsx   # Office files work the same way
 python -m docupilot.cli restore              # rebuild local data from Pinecone
 python -m docupilot.cli train-router         # retrain the router, including examples learned from use
 python -m docupilot.cli cache-clear          # forget cached answers
@@ -176,7 +178,7 @@ e.g. `pp.18–22`), so a 97-slide deck becomes about 20 context-rich chunks inst
 ## Testing & evaluation
 
 ```bash
-pytest -q                          # 67 offline tests, ~7 s, no keys needed
+pytest -q                          # 76 offline tests, ~7 s, no keys needed
 python eval/run_eval.py --delay 4  # live evaluation against your index
 ```
 

@@ -145,10 +145,12 @@ with st.sidebar:
     docs = registry().list(namespace)
     st.subheader(f"Documents ({len(docs)})")
     with st.expander("➕ Add documents", expanded=not docs):
-        uploads = st.file_uploader("PDF, Markdown or text", type=["pdf", "md", "txt"], accept_multiple_files=True)
+        uploads = st.file_uploader("PDF, Word, PowerPoint, Excel, CSV, HTML, Markdown or text",
+                                   type=["pdf", "docx", "pptx", "xlsx", "csv", "html", "htm", "md", "txt"],
+                                   accept_multiple_files=True)
         read_images = st.checkbox(
-            "Read pictures on pages with little text", value=settings.describe_images,
-            help=f"Diagrams, tables and scanned pages are read by the AI model so they become searchable. "
+            "Read pictures on pages and slides with little text", value=settings.describe_images,
+            help=f"Diagrams, tables, scanned PDF pages and pictures in Word/PowerPoint files are read by the AI model so they become searchable. "
                  f"Uses 1 AI call per such page (at most {settings.vision_max_pages} per file).")
         if st.button("Ingest", disabled=not uploads, use_container_width=True, type="primary"):
             from docupilot.ingest import ingest_paths
@@ -191,7 +193,8 @@ with st.sidebar:
 
     for name, meta in docs.items():
         with st.expander(f"📄 {name}"):
-            pages = f"{meta['pages']} pages · " if meta.get("pages") else ""
+            unit = "slides" if name.lower().endswith(".pptx") else "pages"
+            pages = f"{meta['pages']} {unit} · " if meta.get("pages") else ""
             st.caption(f"{pages}{meta['chunks']} chunks · added {meta['ingested_at'][:10]}")
             if meta.get("summary"):
                 st.write(meta["summary"])

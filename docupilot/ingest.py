@@ -26,7 +26,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .vision import PageDescriber
 
-SUPPORTED = {".pdf", ".md", ".txt"}
+from .loaders import LEGACY, OFFICE, load_office
+
+SUPPORTED = {".pdf", ".md", ".txt"} | OFFICE
 MIN_CHARS_PER_PAGE = 25  # below this a PDF page is almost certainly a scanned image
 
 
@@ -109,6 +111,13 @@ def load_file(path: Path, display_name: str | None = None,
                             "they may be images or scans.")
     elif suffix in {".md", ".txt"}:
         docs = [Document(_clean(path.read_text(encoding="utf-8", errors="ignore")), metadata={"source": name})]
+    elif suffix in OFFICE:
+        docs, warnings = load_office(path, name, describe_page)
+        for d in docs:
+            d.page_content = _clean(d.page_content)
+    elif suffix in LEGACY:
+        raise DocuPilotError(f"'{name}' is an old {suffix} file. Open it in Office and use Save As → "
+                             f"{LEGACY[suffix]}, then upload that.")
     else:
         raise DocuPilotError(f"Unsupported file type: {suffix} (supported: {', '.join(sorted(SUPPORTED))})")
 
@@ -139,7 +148,8 @@ def merge_short_pages(docs: list[Document], target: int) -> list[Document]:
     def flush():
         if not buf:
             return
-        text = "\n\n".join(f"[Page {d.metadata['page']}]\n{d.page_content}" for d in buf) if len(buf) > 1 else buf[0].page_content
+        unit = str(buf[0].metadata.get("unit", "page")).title()
+        text = "\n\n".join(f"[{unit} {d.metadata['page']}]\n{d.page_content}" for d in buf) if len(buf) > 1 else buf[0].page_content
         meta = {**buf[0].metadata}
         if len(buf) > 1:
             meta["page_end"] = buf[-1].metadata["page"]
@@ -253,7 +263,7 @@ def ingest_paths(paths: list[Path], namespace: str | None = None, names: list[st
         elif p.suffix.lower() in SUPPORTED:
             files.append((p, names[i] if names else p.name))
     if not files:
-        raise DocuPilotError("No supported files found (.pdf, .md, .txt).")
+        raise DocuPilotError(f"No supported files found ({', '.join(sorted(SUPPORTED))}).")
 
     index = ensure_index()
     store = get_vectorstore(ns)

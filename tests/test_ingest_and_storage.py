@@ -39,10 +39,13 @@ def test_scanned_pdf_is_rejected(tmp_path):
 
 
 def test_unsupported_and_empty_files(tmp_path):
-    (tmp_path / "a.docx").write_text("x")
+    (tmp_path / "a.exe").write_text("x")
+    (tmp_path / "broken.docx").write_text("not really a Word file")
     (tmp_path / "e.txt").write_text("   ")
     with pytest.raises(DocuPilotError, match="Unsupported"):
-        load_file(tmp_path / "a.docx")
+        load_file(tmp_path / "a.exe")
+    with pytest.raises(DocuPilotError, match="Could not read"):
+        load_file(tmp_path / "broken.docx")
     with pytest.raises(DocuPilotError, match="empty"):
         load_file(tmp_path / "e.txt")
 

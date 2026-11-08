@@ -84,7 +84,10 @@ def _label(doc: Document) -> str:
         parts.append("summary + excerpt")
     if m.get("page"):
         first, last = as_int(m["page"]), as_int(m.get("page_end"))
-        parts.append(f"pp.{first}–{last}" if last and last != first else f"p.{first}")
+        if m.get("unit") == "slide":
+            parts.append(f"slides {first}–{last}" if last and last != first else f"slide {first}")
+        else:
+            parts.append(f"pp.{first}–{last}" if last and last != first else f"p.{first}")
     if m.get("section"):
         parts.append(f"§ {m['section']}")
     return " · ".join(parts)
